@@ -2,8 +2,7 @@
 
 # Honeypie: Multi-Service Honeypot Framework
 
-![Python](https://img.shields.io/badge/Python-3.6%2B-blue)
-![License](https://img.shields.io/badge/License-MIT-green)
+![Python](https://img.shields.io/badge/Python-3.13.5-blue)
 ![SSH](https://img.shields.io/badge/Service-SSH-orange)
 ![HTTP](https://img.shields.io/badge/Service-HTTP-red)
 ![FTP](https://img.shields.io/badge/Service-FTP-blue)
@@ -28,19 +27,20 @@
 2. If you’re inside a virtual environment (recommended)
    ```
    python3 -m venv venv
-  source venv/bin/activate   # Linux/macOS
-  venv\Scripts\activate      # Windows PowerShell
-  pip install -r requirements.txt
-  ```
-⚠️ Make sure you’re using a Python version supported by the packages (paramiko==3.4.0, cryptography==42.0.5 both work fine on Python 3.8+).
+   source venv/bin/activate   # Linux/macOS
+   venv\Scripts\activate      # Windows PowerShell
+   pip install -r requirements.txt
+   ```
+
+   ⚠️ Make sure you’re using a Python version supported by the packages (paramiko==3.4.0, cryptography==42.0.5 both work fine on Python 3.8+).
 
 3. **Install dependencies**:
-   ```bash
+   ```
    pip install paramiko
    ```
 
 4. **Run the honeypot**:
-   ```bash
+   ```
    python argparseHoney.py [service] [options]
    ```
 

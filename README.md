@@ -1,4 +1,3 @@
-# Honeypot
 
 # Honeypie: Multi-Service Honeypot Framework
 
@@ -22,7 +21,7 @@
 1. **Clone the repository**:
    ```bash
    git clone <repository-url>
-   cd honeypie
+   cd honeypot
    ```
 2. **If you’re inside a virtual environment (recommended)**
    ```

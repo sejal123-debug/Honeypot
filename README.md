@@ -24,7 +24,7 @@
    git clone <repository-url>
    cd honeypie
    ```
-2. If you’re inside a virtual environment (recommended)
+2. **If you’re inside a virtual environment (recommended)**
    ```
    python3 -m venv venv
    source venv/bin/activate   # Linux/macOS

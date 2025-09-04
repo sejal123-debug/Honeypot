@@ -117,6 +117,8 @@ ssh -o StrictHostKeyChecking=no test@<ip-address> -p 2222
 ```
 Test
 ```
+telnet <ip-address> 2121
+(or)
 ftp <ip-address> 
 (or)
 ftp

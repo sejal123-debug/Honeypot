@@ -17,13 +17,43 @@ _PRIVILEGE_LEVELS = {
     "root": 3        # Full system access
 }
 
-# Default user privileges mapping
+# Default user privileges mapping (for passwords)
 _USER_PRIVILEGES = {
-    "admin": "admin",
+    "admin": "horse@123",
     "root": "root",
     "test": "user",
     "user": "user",
     "guest": "guest"
+}
+
+# User privilege level mapping (for su command)
+_USER_PRIVILEGE_LEVELS = {
+    "root": "root",
+    "admin": "admin", 
+    "john": "user",
+    "test": "user",
+    "user": "user",
+    "guest": "guest",
+    "lisa": "user",
+    "jane.smith": "user",
+    "mike": "user",
+    "sarah.jones": "user",
+    "david.brown": "user",
+    "robert.taylor": "user",
+    "amanda.white": "user",
+    "chris.lee": "user",
+    "jennifer.martin": "user",
+    "ftp": "user",
+    "backup": "user",
+    "monitor": "user",
+    "mysql": "user",
+    "postgres": "user",
+    "apache": "user",
+    "nginx": "user",
+    "redis": "user",
+    "elasticsearch": "user",
+    "jenkins": "user",
+    "git": "user"
 }
 
 
@@ -100,6 +130,32 @@ def _check_file_access(user_privilege: int, file_path: str, operation: str, user
     if user_privilege >= _PRIVILEGE_LEVELS["root"]:
         return True, "root_access"
     
+    # Check for specific user home directory access FIRST (before general rules)
+    if file_path.startswith("/home/"):
+        path_parts = file_path.split("/")
+        if len(path_parts) >= 3:
+            target_user = path_parts[2]
+            # Users can access their own home directory
+            if target_user == username:
+                return True, "own_home"
+            # Special case: Allow guest users to access /home/john
+            elif target_user == "john" and user_privilege >= _PRIVILEGE_LEVELS["guest"]:
+                # Check for specific file restrictions in john's home
+                if file_path == "/home/john/key.txt":
+                    return False, "access_denied_key_file_restricted"
+                elif file_path == "/home/john/password":
+                    return True, "john_home_password_file_allowed"
+                else:
+                    return True, "john_home_guest_access"
+            # Regular users (level 1) can only access their own home, not other users' homes
+            elif user_privilege == _PRIVILEGE_LEVELS["user"]:
+                return False, f"access_denied_other_user_home_{target_user}_regular_user_restriction"
+            # Admin and root can access all user homes
+            elif user_privilege >= _PRIVILEGE_LEVELS["admin"]:
+                return True, "admin_access"
+            else:
+                return False, f"access_denied_other_user_home_{target_user}"
+    
     # Define access rules based on the house analogy
     access_rules = {
         # Root directory - everyone can read, only root can write
@@ -165,11 +221,11 @@ def _check_file_access(user_privilege: int, file_path: str, operation: str, user
             "execute": [3]  # root only
         },
         
-        # User home directories
+        # User home directories - regular users can only list, not access other homes
         "/home": {
-            "read": [1, 2, 3],  # user, admin, root
+            "read": [0, 1, 2, 3],  # guest, user, admin, root (for listing)
             "write": [3],  # root only
-            "execute": [1, 2, 3]  # user, admin, root
+            "execute": [0, 1, 2, 3]  # guest, user, admin, root (for cd /home)
         },
         
         # Temporary directory - everyone
@@ -179,18 +235,25 @@ def _check_file_access(user_privilege: int, file_path: str, operation: str, user
             "execute": [0, 1, 2, 3]  # everyone
         },
         
-        # System binaries - admin and root
+        # System binaries - regular users can read and execute
         "/bin": {
-            "read": [2, 3],  # admin, root
+            "read": [1, 2, 3],  # user, admin, root
             "write": [3],  # root only
             "execute": [0, 1, 2, 3]  # everyone can execute
         },
         
-        # System binaries - admin and root
+        # System binaries - admin and root only
         "/sbin": {
             "read": [2, 3],  # admin, root
             "write": [3],  # root only
             "execute": [2, 3]  # admin, root
+        },
+        
+        # User directory - regular users can access
+        "/usr": {
+            "read": [1, 2, 3],  # user, admin, root
+            "write": [3],  # root only
+            "execute": [1, 2, 3]  # user, admin, root
         },
         
         # User binaries - everyone
@@ -214,20 +277,6 @@ def _check_file_access(user_privilege: int, file_path: str, operation: str, user
             "execute": [2, 3]  # admin, root
         }
     }
-    
-    # Check for specific user home directory access
-    if file_path.startswith("/home/"):
-        path_parts = file_path.split("/")
-        if len(path_parts) >= 3:
-            target_user = path_parts[2]
-            # Users can access their own home directory
-            if target_user == username:
-                return True, "own_home"
-            # Admin and root can access all user homes
-            elif user_privilege >= _PRIVILEGE_LEVELS["admin"]:
-                return True, "admin_access"
-            else:
-                return False, f"access_denied_other_user_home_{target_user}"
     
     # Check for SSH keys and sensitive files
     sensitive_patterns = [
@@ -320,6 +369,52 @@ def _check_sudo_password(user: str, password: str) -> bool:
     
     # For other users, always fail
     return False
+
+def _load_passwords_from_file() -> dict[str, str]:
+    """Load passwords from passwords.txt file"""
+    passwords = {}
+    # Try multiple possible paths for passwords.txt
+    possible_paths = [
+        "passwords.txt",
+        os.path.join(os.path.dirname(__file__), "passwords.txt"),
+        os.path.join(os.getcwd(), "passwords.txt")
+    ]
+    
+    for file_path in possible_paths:
+        try:
+            with open(file_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        if ":" in line:
+                            username, password = line.split(":", 1)
+                            passwords[username] = password
+                _log(f"Loaded {len(passwords)} users from passwords.txt")
+                break  # Successfully loaded, exit loop
+        except FileNotFoundError:
+            continue  # Try next path
+        except Exception as e:
+            _log(f"ERROR loading {file_path}: {e}")
+            continue  # Try next path
+    
+    if not passwords:
+        _log("WARNING: passwords.txt file not found in any location, using default passwords")
+        # Fallback to some default passwords
+        passwords = {
+            "john": "rabbit",
+            "admin": "horse@123",
+            "root": "root",
+            "user": "user",
+            "test": "test",
+            "guest": "guest"
+        }
+    
+    return passwords
+
+def _check_user_password(username: str, password: str) -> bool:
+    """Check if the provided password is correct for the given user"""
+    passwords = _load_passwords_from_file()
+    return passwords.get(username) == password
 
  #######
 
@@ -499,8 +594,8 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
         server.event.wait(20)
 
         user_display = server.authenticated_user or "unknown"
-        host_display = "honeypot"
         attacker_ip = addr[0]
+        host_display = attacker_ip
         
         # Session is persistent until user explicitly quits
         
@@ -580,7 +675,6 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
                         "nc": {"type": "file", "content": ""},
                         "netcat": {"type": "file", "content": ""},
                         "netstat": {"type": "file", "content": ""},
-                        "nmap": {"type": "file", "content": ""},
                         "nslookup": {"type": "file", "content": ""},
                         "openssl": {"type": "file", "content": ""},
                         "passwd": {"type": "file", "content": ""},
@@ -627,18 +721,20 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
                         "vmlinuz-6.12.25-amd64": {"type": "file", "content": "LINUXKERNEL"}
                     }},
                     "etc": {"type": "dir", "children": {
-                        "hosts": {"type": "file", "content": "127.0.0.1 localhost\n192.168.1.1 router"},
+                        "hosts": {"type": "file", "content": "127.0.0.1 localhost\r\n192.168.1.1 router"},
                         "hostname": {"type": "file", "content": "srv-01"},
-                        "passwd": {"type": "file", "content": "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\njohn:x:1000:1000:John Doe,,,:/home/john:/bin/bash\nwww-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\nmysql:x:999:999:MySQL Server,,,:/var/lib/mysql:/bin/false"},
-                        "shadow": {"type": "file", "content": "root:*:19579:0:99999:7:::\ndaemon:*:19579:0:99999:7:::\njohn:$y$j9T$F4B6U1Q7s9q8d2p1E1bV1.$0JjV9Q2r8q7w6t5Y4u3I2e1R0T9Y2U3I4O5P6Q7W:19579:0:99999:7:::\nwww-data:*:19579:0:99999:7:::\nmysql:!:19579:0:99999:7:::"},
-                        "ssh": {"type": "dir", "children": {"sshd_config": {"type": "file", "content": "Port 22\nPermitRootLogin no"}}},
+                        "passwd": {"type": "file", "content": "root:x:0:0:root:/root:/bin/bash\r\nbin:x:2:2:bin:/bin:/usr/sbin/nologin\r\nsys:x:3:3:sys:/dev:/usr/sbin/nologin\r\nsync:x:4:65534:sync:/bin:/bin/sync\r\ngames:x:5:60:games:/usr/games:/usr/sbin/nologin\r\nman:x:6:12:man:/var/cache/man:/usr/sbin/nologin\r\nlp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin\r\nmail:x:8:8:mail:/var/mail:/usr/sbin/nologin\r\nnews:x:9:9:news:/var/spool/news:/usr/sbin/nologin\r\nuucp:x:10:10:uucp:/var/spool/uucp:/usr/sbin/nologin\r\nproxy:x:13:13:proxy:/bin:/usr/sbin/nologin\r\nwww-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\r\nbackup:x:34:34:backup:/var/backups:/usr/sbin/nologin\r\nlist:x:38:38:Mailing List Manager:/var/list:/usr/sbin/nologin\r\nirc:x:39:39:ircd:/var/run/ircd:/usr/sbin/nologin\r\ngnats:x:41:41:Gnats Bug-Reporting System (admin):/var/lib/gnats:/usr/sbin/nologin\r\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\r\nsyslog:x:101:104::/home/syslog:/bin/false\r\nsshd:x:102:65534::/var/run/sshd:/usr/sbin/nologin\r\nftp:x:103:106:ftp john,,,:/srv/ftp:/bin/false\r\nbitnamiftp:x:1000:1000::/opt/bitnami/apps:/bin/bitnami_ftp_false\r\nmysql:x:1001:1001::/home/mysql:\r\nvarnish:x:999:999::/home/varnish:\r\nrobot:x:1002:1002::/home/robot:\r\nuuidd:x:100:101::/run/uuidd:/bin/false\r\nsystemd-timesync:x:104:109:systemd Time Synchronization,,,:/run/systemd:/bin/false\r\nsystemd-network:x:105:110:systemd Network Management,,,:/run/systemd/netif:/bin/false\r\nsystemd-resolve:x:106:111:systemd Resolver,,,:/run/systemd/resolve:/bin/false\r\n_apt:x:108:65534::/nonexistent:/bin/false\r\nmessagebus:x:109:114::/var/run/dbus:/bin/false\r\nusbmux:x:107:46:usbmux john,,,:/var/lib/usbmux:/usr/sbin/nologin\r\nsystemd-coredump:x:998:998:systemd Core Dumper:/:/usr/sbin/nologin\r\nubuntu:x:1003:1004:Ubuntu:/home/ubuntu:/bin/bash\r\njohn:x:1000:1000:John Doe,,,:/home/john:/bin/bash"},
+                        "shadow": {"type": "file", "content": "root:*:19579:0:99999:7:::\r\njohn:*:19579:0:99999:7:::\r\njohn:$y$j9T$F4B6U1Q7s9q8d2p1E1bV1.$0JjV9Q2r8q7w6t5Y4u3I2e1R0T9Y2U3I4O5P6Q7W:19579:0:99999:7:::\r\nwww-data:*:19579:0:99999:7:::\r\nmysql:!:19579:0:99999:7:::"},
+                        "ssh": {"type": "dir", "children": {"sshd_config": {"type": "file", "content": "Port 22\r\nPermitRootLogin no"}}},
                         "resolv.conf": {"type": "file", "content": "nameserver 8.8.8.8"},
                     }},
                     "home": {"type": "dir", "children": {
                         "john": {"type": "dir", "children": {
-                            ".bash_history": {"type": "file", "content": "ls -la\ncat /etc/passwd\nssh root@10.0.0.5"},
+                            ".bash_history": {"type": "file", "content": "ls -la\r\ncat /etc/passwd\r\nssh root@10.0.0.5"},
                             "user.txt": {"type": "file", "content": "Welcome to the system, John."},
-                            ".ssh": {"type": "dir", "children": {"id_rsa": {"type": "file", "content": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAA.....BASE64...DATA...\n-----END OPENSSH PRIVATE KEY-----"}}}
+                            "password": {"type": "file", "content": "john:a51e47f646375ab6bf5dd2c42d3e6181"},
+                            "key.txt": {"type": "file", "content": "API_KEY=sk-1234567890abcdef\r\nSECRET_TOKEN=xyz789abc123\nDB_PASSWORD=temp123456"},
+                            ".ssh": {"type": "dir", "children": {"id_rsa": {"type": "file", "content": "-----BEGIN OPENSSH PRIVATE KEY-----\r\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAA.....BASE64...DATA...\r\n-----END OPENSSH PRIVATE KEY-----"}}}
                         }},
                         "www-data": {"type": "dir", "children": {"web_app.zip": {"type": "file", "content": "PK\x03\x04ZIPDATA"}}},
                         user_display: {"type": "dir", "children": {}}
@@ -664,14 +760,14 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
                         "libzopflipng.so.1.0.3": {"type": "file", "content": "ELF..."}
                     }},
                     "proc": {"type": "dir", "children": {
-                        "cpuinfo": {"type": "file", "content": "processor\t: 0\nmodel name\t: Intel(R) Xeon(R) CPU"},
+                        "cpuinfo": {"type": "file", "content": "processor\t: \r\nmodel name\t: Intel(R) Xeon(R) CPU"},
                         "meminfo": {"type": "file", "content": "MemTotal:       2048000 kB"},
                         "uptime": {"type": "file", "content": "12345.67 54321.00"},
                         "stat": {"type": "file", "content": "cpu  2255 34 2290 22625563 6290 127 456"},
                         "version": {"type": "file", "content": "Linux version 5.15.0 (gcc version 11.4.0)"},
                         "vmstat": {"type": "file", "content": "nr_free_pages 1024"},
                         "mounts": {"type": "file", "content": "/dev/sda1 / ext4 rw,relatime 0 0"},
-                        "modules": {"type": "file", "content": "xt_conntrack 16384 1\nbr_netfilter 28672 0"},
+                        "modules": {"type": "file", "content": "xt_conntrack 16384 1\r\nbr_netfilter 28672 0"},
                         "softirqs": {"type": "file", "content": "CPU0: 0 1 2 3 4"},
                         "self": {"type": "dir", "children": {}},
                         "1": {"type": "dir", "children": {}},
@@ -697,14 +793,103 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
                         "zoneinfo": {"type": "file", "content": "Node 0, zone   DMA"}
                     }},
                     "tmp": {"type": "dir", "children": {}},
-                    "var": {"type": "dir", "children": {"log": {"type": "dir", "children": {"auth.log": {"type": "file", "content": ""}, "apache2": {"type": "dir", "children": {"access.log": {"type": "file", "content": "127.0.0.1 - - [01/Jan/2025:00:00:00 +0000] \"GET / HTTP/1.1\" 200 123"}}}, "syslog": {"type": "file", "content": ""}, "attacker_ip": {"type": "file", "content": f"{attacker_ip} {datetime.utcnow().isoformat()}Z"}}}, "www": {"type": "dir", "children": {"html": {"type": "dir", "children": {"index.html": {"type": "file", "content": "<html><body><h1>It works!</h1></body></html>"}}}}}}},
+                    "var": {"type": "dir", "children": {"log": {"type": "dir", "children": {"auth.log": {"type": "file", "content": "Jan 10 14:30:01 srv-01 sudo:     root : TTY=pts/0 ; PWD=/root ; USER=root ; COMMAND=/usr/bin/python3\r\nJan 10 14:32:15 srv-01 su: (to root) john on pts/1\r\nJan 10 15:45:22 srv-01 python3: SUID privilege escalation detected\r\nJan 10 16:12:33 srv-01 sudo:     admin : TTY=pts/2 ; PWD=/home/admin ; USER=root ; COMMAND=/usr/bin/python3 -c import os; os.execl('/bin/sh', 'sh', '-p')\r\nJan 10 16:15:44 srv-01 python3: SUID exploit attempt blocked\r\nJan 11 09:23:11 srv-01 sshd[1234]: Accepted password for test from 192.168.1.100 port 22 ssh2\r\nJan 11 09:25:33 srv-01 su: (to john) test on pts/3\r\nJan 11 09:26:45 srv-01 python3: SUID privilege escalation detected\r\n"}, "apache2": {"type": "dir", "children": {"access.log": {"type": "file", "content": "127.0.0.1 - - [01/Jan/2025:00:00:00 +0000] \"GET / HTTP/1.1\" 200 123"}}}, "syslog": {"type": "file", "content": ""}, "attacker_ip": {"type": "file", "content": f"{attacker_ip} {datetime.utcnow().isoformat()}Z"}}}, "www": {"type": "dir", "children": {"html": {"type": "dir", "children": {"index.html": {"type": "file", "content": "<html><body><h1>It works!</h1></body></html>"}}}}}}},
                     "opt": {"type": "dir", "children": {
                         "microsoft": {"type": "dir", "children": {}},
                         "splunk": {"type": "dir", "children": {}},
                         "splunkforwarder": {"type": "dir", "children": {}},
-                        "scripts": {"type": "dir", "children": {"backup.sh": {"type": "file", "content": "#!/bin/bash\necho Backing up /var/www...\n# TODO: implement"}}}
+                        "scripts": {"type": "dir", "children": {"backup.sh": {"type": "file", "content": "#!/bin/bash\r\necho Backing up /var/www...\r\n# TODO: implement"}}}
                     }},
-                    "root": {"type": "dir", "children": {".bash_history": {"type": "file", "content": "sudo su\nwhoami"}, "file.txt": {"type": "file", "content": "DYNAMIC_FLAG"}, ".ssh": {"type": "dir", "children": {"authorized_keys": {"type": "file", "content": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQD... user@host"}}}}},
+                    "root": {"type": "dir", "children": {".bash_history": {"type": "file", "content": "sudo su\r\nwhoami"}, "file.txt": {"type": "file", "content": "DYNAMIC_FLAG"}, ".ssh": {"type": "dir", "children": {"authorized_keys": {"type": "file", "content": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQD... user@host"}}}}},
+                    ".badr-info": {"type": "file", "content": "Badr Info File\nSystem Information\nLast Updated: 2025-01-11"},
+                    "dev": {"type": "dir", "children": {
+                        "null": {"type": "file", "content": ""},
+                        "zero": {"type": "file", "content": ""},
+                        "random": {"type": "file", "content": ""},
+                        "urandom": {"type": "file", "content": ""},
+                        "tty": {"type": "file", "content": ""},
+                        "console": {"type": "file", "content": ""},
+                        "sda": {"type": "file", "content": ""},
+                        "sda1": {"type": "file", "content": ""},
+                        "sda2": {"type": "file", "content": ""}
+                    }},
+                    "initrd.img": {"type": "symlink", "content": "boot/initrd.img-5.15.0-139-generic"},
+                    "initrd.img.old": {"type": "symlink", "content": "boot/initrd.img-5.4.0-216-generic"},
+                    "lib32": {"type": "dir", "children": {}},
+                    "lib64": {"type": "dir", "children": {}},
+                    "lost+found": {"type": "dir", "children": {}},
+                    "media": {"type": "dir", "children": {}},
+                    "mnt": {"type": "dir", "children": {}},
+                    "run": {"type": "dir", "children": {
+                        "sshd.pid": {"type": "file", "content": "1234"},
+                        "nginx.pid": {"type": "file", "content": "901"},
+                        "systemd": {"type": "dir", "children": {}}
+                    }},
+                    "sbin": {"type": "dir", "children": {
+                        "init": {"type": "file", "content": ""},
+                        "systemctl": {"type": "file", "content": ""},
+                        "service": {"type": "file", "content": ""},
+                        "iptables": {"type": "file", "content": ""},
+                        "ip": {"type": "file", "content": ""},
+                        "ifconfig": {"type": "file", "content": ""},
+                        "mount": {"type": "file", "content": ""},
+                        "umount": {"type": "file", "content": ""},
+                        "fdisk": {"type": "file", "content": ""},
+                        "mkfs": {"type": "file", "content": ""},
+                        "fsck": {"type": "file", "content": ""},
+                        "shutdown": {"type": "file", "content": ""},
+                        "reboot": {"type": "file", "content": ""},
+                        "halt": {"type": "file", "content": ""}
+                    }},
+                    "srv": {"type": "dir", "children": {}},
+                    "sys": {"type": "dir", "children": {
+                        "kernel": {"type": "dir", "children": {}},
+                        "devices": {"type": "dir", "children": {}},
+                        "fs": {"type": "dir", "children": {}},
+                        "class": {"type": "dir", "children": {}},
+                        "bus": {"type": "dir", "children": {}},
+                        "module": {"type": "dir", "children": {}}
+                    }},
+                    "usr": {"type": "dir", "children": {
+                        "bin": {"type": "dir", "children": {
+                            "python3": {"type": "file", "content": "", "perms": "-rwsr-xr-x", "owner": "root", "group": "root", "size": 10000},
+                            "git": {"type": "file", "content": ""},
+                            "vim": {"type": "file", "content": ""},
+                            "nano": {"type": "file", "content": ""},
+                            "gcc": {"type": "file", "content": ""},
+                            "make": {"type": "file", "content": ""},
+                            "grep": {"type": "file", "content": ""},
+                            "sed": {"type": "file", "content": ""},
+                            "awk": {"type": "file", "content": ""},
+                            "find": {"type": "file", "content": ""},
+                            "locate": {"type": "file", "content": ""},
+                            "updatedb": {"type": "file", "content": ""}
+                        }},
+                        "sbin": {"type": "dir", "children": {
+                            "sshd": {"type": "file", "content": ""},
+                            "nginx": {"type": "file", "content": ""},
+                            "apache2": {"type": "file", "content": ""},
+                            "mysql": {"type": "file", "content": ""},
+                            "postgres": {"type": "file", "content": ""},
+                            "redis-server": {"type": "file", "content": ""}
+                        }},
+                        "lib": {"type": "dir", "children": {}},
+                        "include": {"type": "dir", "children": {}},
+                        "share": {"type": "dir", "children": {
+                            "doc": {"type": "dir", "children": {}},
+                            "man": {"type": "dir", "children": {}},
+                            "applications": {"type": "dir", "children": {}}
+                        }},
+                        "local": {"type": "dir", "children": {
+                            "bin": {"type": "dir", "children": {}},
+                            "sbin": {"type": "dir", "children": {}},
+                            "lib": {"type": "dir", "children": {}},
+                            "include": {"type": "dir", "children": {}},
+                            "share": {"type": "dir", "children": {}}
+                        }}
+                    }},
+                    "vmlinuz": {"type": "symlink", "content": "boot/vmlinuz-5.15.0-139-generic"},
+                    "vmlinuz.old": {"type": "symlink", "content": "boot/vmlinuz-5.4.0-216-generic"},
                 },
             }
         }
@@ -790,7 +975,7 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
         session_state = {
             "crontab": [],
             "authorized_keys": [],
-            "etc_hosts": "127.0.0.1 localhost\n192.168.1.1 router\n",
+            "etc_hosts": "127.0.0.1 localhost\r\n192.168.1.1 router\r\n",
         }
 
         # Command set for autocompletion
@@ -891,6 +1076,40 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
                     parts = expanded.split()
                 cmd = parts[0]
                 args = parts[1:]
+
+                # Check for Python SUID privilege escalation attempts
+                if cmd in {"python3", "python"}:
+                    _log(f"PYTHON_COMMAND: {user_display} executed: {line}", level="ALERT")
+                    
+                    # Check for SUID privilege escalation exploit using the original line
+                    if ("os.execl" in line and "/bin/sh" in line and "sh" in line and "-p" in line):
+                        # Simulate successful privilege escalation
+                        _log(f"PRIVILEGE_ESCALATION_SUCCESS: {user_display} gained root via Python SUID exploit", level="ALERT")
+                        user_display = "root"
+                        server.user_privilege = _PRIVILEGE_LEVELS["root"]
+                        chan.send(b"# \r\n")
+                        chan.send(_prompt())
+                        continue
+                    elif cmd == "python3" and len(args) == 1 and args[0] == "--version":
+                        chan.send(b"Python 3.8.10\r\n")
+                        chan.send(_prompt())
+                        continue
+                    elif cmd == "python3" and len(args) == 0:
+                        chan.send(b"Python 3.8.10 (default, Oct 10 2021, 03:48:00) \r\n[GCC 8.4.0] on linux\r\nType \"help\", \"copyright\", \"credits\" or \"license\" for more information.\r\n>>> ")
+                        chan.send(_prompt())
+                        continue
+                    else:
+                        # Show fake error for other Python commands
+                        chan.send(b"python3: error while loading shared libraries: libpython3.8.so.1.0: cannot open shared object file: No such file or directory\r\n")
+                        chan.send(_prompt())
+                        continue
+
+                # Handle other commands that make the system look vulnerable
+                elif cmd in {"apt", "apt-get"} and len(args) > 0 and args[0] in {"update", "upgrade", "install"}:
+                    chan.send(b"E: The repository 'http://archive.ubuntu.com/ubuntu bionic Release' does not have a Release file.\r\n")
+                    chan.send(b"E: Some index files failed to download. They have been ignored, or old ones used instead.\r\n")
+                    chan.send(_prompt())
+                    continue
 
                 if cmd in {"exit", "logout", "quit"}:
                     # Clean up session on explicit exit
@@ -1004,7 +1223,7 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
                         # List sudo privileges - any user can check
                         _log(f"SUDO_LIST: {user_display} ({_get_privilege_name(server.user_privilege)}) checked sudo privileges")
                         chan.send(b"Matching Defaults entries for " + user_display.encode() + b" on " + host_display.encode() + b":\r\n")
-                        chan.send(b"    env_reset, mail_badpass, secure_path=/usr/local/sbin\\:/usr/local/bin\\:/usr/sbin\\:/usr/bin\\:/sbin\\:/bin\\:/snap/bin\r\n\r\n")
+                        chan.send(b"(root) NOPASSWD: /usr/bin/python, env_reset, mail_badpass, secure_path=/usr/local/sbin\\:/usr/local/bin\\:/usr/sbin\\:/usr/bin\\:/sbin\\:/bin\\:/snap/bin\r\n\r\n")
                         chan.send(b"User " + user_display.encode() + b" may run the following commands on " + host_display.encode() + b":\r\n")
                         chan.send(b"    (ALL : ALL) ALL\r\n")
                     elif args[0] == "-k":
@@ -1027,7 +1246,8 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
                                 chan.send(f"Switched to user {target_user}\r\n".encode())
                                 # Update the user display and privilege
                                 user_display = target_user
-                                server.user_privilege = _PRIVILEGE_LEVELS.get(_USER_PRIVILEGES.get(target_user, "guest"), _PRIVILEGE_LEVELS["guest"])
+                                target_privilege = _USER_PRIVILEGE_LEVELS.get(target_user, "user")
+                                server.user_privilege = _PRIVILEGE_LEVELS.get(target_privilege, _PRIVILEGE_LEVELS["user"])
                             else:
                                 chan.send(b"Sorry, try again.\r\n")
                                 password2 = _read_password_input(chan, f"[sudo] password for {target_user}: ")
@@ -1037,7 +1257,8 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
                                     _log(f"SUDO_SUCCESS: {user_display} successfully switched to {target_user} on second attempt")
                                     chan.send(f"Switched to user {target_user}\r\n".encode())
                                     user_display = target_user
-                                    server.user_privilege = _PRIVILEGE_LEVELS.get(_USER_PRIVILEGES.get(target_user, "guest"), _PRIVILEGE_LEVELS["guest"])
+                                    target_privilege = _USER_PRIVILEGE_LEVELS.get(target_user, "user")
+                                    server.user_privilege = _PRIVILEGE_LEVELS.get(target_privilege, _PRIVILEGE_LEVELS["user"])
                                 else:
                                     chan.send(b"sudo: 2 incorrect password attempts\r\n")
                         else:
@@ -1045,7 +1266,8 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
                             _log(f"SUDO_SU_DIRECT: {user_display} switched to {target_user} without password")
                             chan.send(f"Switched to user {target_user}\r\n".encode())
                             user_display = target_user
-                            server.user_privilege = _PRIVILEGE_LEVELS.get(_USER_PRIVILEGES.get(target_user, "guest"), _PRIVILEGE_LEVELS["guest"])
+                            target_privilege = _USER_PRIVILEGE_LEVELS.get(target_user, "user")
+                            server.user_privilege = _PRIVILEGE_LEVELS.get(target_privilege, _PRIVILEGE_LEVELS["user"])
                     else:
                         # All other sudo commands - any user can run, check password
                         _log(f"SUDO_ATTEMPT: {user_display} ({_get_privilege_name(server.user_privilege)}) attempted: sudo {' '.join(args)}")
@@ -1076,25 +1298,31 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
                     # Log su attempt
                     _log(f"SU_ATTEMPT: {user_display} ({_get_privilege_name(server.user_privilege)}) attempted to switch to: {target_user}")
                     
-                    # Check if user can switch to target user
-                    if target_user == "root":
-                        if server.user_privilege >= _PRIVILEGE_LEVELS["admin"]:
-                            # Read password input
-                            password = _read_password_input(chan, "Password: ")
-                            _log(f"SU_PASSWORD_INPUT: {user_display} entered password for su {target_user}: {password}")
-                            chan.send(b"su: Authentication failure\r\n")
-                        else:
-                            chan.send(b"su: must be run from a terminal\r\n")
-                    elif target_user in ["admin", "user", "test"]:
-                        if server.user_privilege >= _PRIVILEGE_LEVELS["user"]:
-                            # Read password input
-                            password = _read_password_input(chan, "Password: ")
-                            _log(f"SU_PASSWORD_INPUT: {user_display} entered password for su {target_user}: {password}")
-                            chan.send(b"su: Authentication failure\r\n")
-                        else:
-                            chan.send(b"su: must be run from a terminal\r\n")
-                    else:
+                    # Check if target user exists in passwords.txt
+                    passwords = _load_passwords_from_file()
+                    if target_user not in passwords:
                         chan.send(f"su: user {target_user} does not exist\r\n".encode())
+                        chan.send(_prompt())
+                        continue
+                    
+                    # Read password input
+                    password = _read_password_input(chan, f"[sudo] password for {target_user}: ")
+                    _log(f"SU_PASSWORD_INPUT: {user_display} entered password for su {target_user}: {password}")
+                    
+                    # Check password
+                    if _check_user_password(target_user, password):
+                        # Password correct - switch user
+                        _log(f"SU_SUCCESS: {user_display} successfully switched to {target_user}")
+                        chan.send(f"Switched to user {target_user}\r\n".encode())
+                        user_display = target_user
+                        # Set privilege level based on target user
+                        target_privilege = _USER_PRIVILEGE_LEVELS.get(target_user, "user")  # Default to user level
+                        server.user_privilege = _PRIVILEGE_LEVELS.get(target_privilege, _PRIVILEGE_LEVELS["user"])
+                        _log(f"SU_PRIVILEGE_CHANGE: {target_user} privilege set to {target_privilege} (level {server.user_privilege})")
+                    else:
+                        # Password incorrect
+                        _log(f"SU_FAILURE: {user_display} failed to switch to {target_user} - incorrect password")
+                        chan.send(b"su: Authentication failure\r\n")
                 # User privilege    
                 # elif cmd == "privileges" or cmd == "whoami -a":
                 #     privilege_name = _get_privilege_name(server.user_privilege)
@@ -1212,22 +1440,31 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
                         if len(cwd) > 1:
                             cwd.pop()
                     else:
+                        # Resolve relative path to absolute path for access control
+                        if target.startswith("/"):
+                            absolute_target = target
+                        else:
+                            # Build absolute path from current working directory
+                            if len(cwd) > 1:
+                                cwd_str = "/" + "/".join(cwd[1:])
+                            else:
+                                cwd_str = "/"
+                            absolute_target = cwd_str.rstrip("/") + "/" + target
+                        
                         # file access privilege
-                        # Check directory access permissions
-                        allowed, reason = _check_file_access(server.user_privilege, target, "execute", user_display)
-                        _log_file_access(user_display, "execute", target, allowed, reason, server.user_privilege)
+                        # Check directory access permissions using absolute path
+                        allowed, reason = _check_file_access(server.user_privilege, absolute_target, "execute", user_display)
+                        _log_file_access(user_display, "execute", absolute_target, allowed, reason, server.user_privilege)
                         
                         if not allowed:
                             chan.send((f"bash: cd: {target}: Permission denied\r\n").encode())
                             chan.send(_prompt())
                             continue
                         ###########
-                        node, parent, name = _resolve(target)
+                        node, parent, name = _resolve(absolute_target)
                         if node and node.get("type") == "dir":
-                            if target.startswith("/"):
-                                cwd[:] = [""] + [p for p in target.split("/") if p]
-                            else:
-                                cwd.extend([p for p in target.split("/") if p])
+                            # Use absolute_target for directory change
+                            cwd[:] = [""] + [p for p in absolute_target.split("/") if p]
                         else:
                             chan.send((f"bash: cd: {target}: No such file or directory\r\n").encode())
                 elif cmd == "ls":
@@ -1293,9 +1530,20 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
                     else:
                         file_path = args[0]
                         
-                        # Check file access permissions
-                        allowed, reason = _check_file_access(server.user_privilege, file_path, "read", user_display)
-                        _log_file_access(user_display, "read", file_path, allowed, reason, server.user_privilege)
+                        # Resolve relative path to absolute path for access control
+                        if not file_path.startswith("/"):
+                            # Build absolute path from current working directory
+                            if len(cwd) > 1:
+                                cwd_str = "/" + "/".join(cwd[1:])
+                            else:
+                                cwd_str = "/"
+                            absolute_file_path = cwd_str.rstrip("/") + "/" + file_path
+                        else:
+                            absolute_file_path = file_path
+                        
+                        # Check file access permissions using absolute path
+                        allowed, reason = _check_file_access(server.user_privilege, absolute_file_path, "read", user_display)
+                        _log_file_access(user_display, "read", absolute_file_path, allowed, reason, server.user_privilege)
                         
                         if not allowed:
                             chan.send(b"cat: Permission denied\r\n")
@@ -1304,22 +1552,34 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
                         ###########
                         output_parts = []
                         for path in args:
+                            # Resolve relative path to absolute path for file resolution
+                            if not path.startswith("/"):
+                                # Build absolute path from current working directory
+                                if len(cwd) > 1:
+                                    cwd_str = "/" + "/".join(cwd[1:])
+                                else:
+                                    cwd_str = "/"
+                                absolute_path = cwd_str.rstrip("/") + "/" + path
+                            else:
+                                absolute_path = path
+                            
                             # dynamic special cases
-                            if path == "/var/log/auth.log":
+                            if absolute_path == "/var/log/auth.log":
                                 output_parts.append("\n".join(_AUTH_EVENTS))
                                 continue
-                            if path == "/root/file.txt":
+                            if absolute_path == "/root/file.txt":
                                 output_parts.append(
+                                    "Key:root_privilege_escalation\r\n"
                                     f"\nTimestamp: {datetime.utcnow().isoformat()}Z"
                                 )
                                 continue
-                            if path == "/root/.ssh/authorized_keys":
+                            if absolute_path == "/root/.ssh/authorized_keys":
                                 output_parts.append("\n".join(session_state["authorized_keys"]))
                                 continue
-                            if path == "/etc/hosts":
+                            if absolute_path == "/etc/hosts":
                                 output_parts.append(session_state["etc_hosts"].rstrip("\n"))
                                 continue
-                            node, _, _ = _resolve(path)
+                            node, _, _ = _resolve(absolute_path)
                             if node and node.get("type") == "file":
                                 output_parts.append(node.get("content", ""))
                             else:
@@ -1644,7 +1904,7 @@ def _handle_client(client: socket.socket, addr: Tuple[str, int], host_key: param
                         "ii  adduser               3.118ubuntu2 all          add and remove users and groups\r\n"
                         "ii  apt                   2.4.9 amd64        command-line package manager\r\n"
                         "ii  bash                  5.1-6ubuntu1 amd64        GNU Bourne Again SHell\r\n"
-                        "ii  cron                  3.0pl1-137ubuntu1 amd64        process scheduling daemon\r\n"
+                        "ii  cron                  3.0pl1-137ubuntu1 amd64        process scheduling john\r\n"
                         "ii  curl                  7.81.0-1ubuntu1.10 amd64        command line tool for transferring data with URL syntax\r\n"
                         "ii  nginx                 1.18.0-6ubuntu14.4 amd64        small, powerful, scalable web/proxy server\r\n"
                         "ii  openssh-server        1:8.9p1-3ubuntu0.3 amd64        secure shell (SSH) server, for secure access from remote machines\r\n"
